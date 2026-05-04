@@ -8,6 +8,21 @@ Supports multi-threading parallel generation & parallel CSV writing using Rayon.
 > This software is based on AI-generated code with additional implementation.
 
 
+Quickstart
+--------------------------------------------------------------------------------
+
+```bash
+mkdir -p /tmp/out
+docker run --rm \
+-v /tmp/out:/var/output \
+-e USERGEN__COUNT=10000 \
+ghcr.io/yo1000/user-generator:latest
+
+ls -l /tmp/out
+less /tmp/out/users.csv
+```
+
+
 Build and Run
 --------------------------------------------------------------------------------
 
