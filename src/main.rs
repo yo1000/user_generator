@@ -274,8 +274,11 @@ fn load_addresses(
             continue;
         }
 
-        // 全角括弧「（」「）」のみ除去し、括弧内の文字列は残す
-        let town_area = raw_town_area.replace('（', "").replace('）', "");
+        // 全角括弧「（」「）」のみ除去し、括弧内の文字列は残す。
+        // 波線文字を U+301C に正規化（Shift_JIS 由来の U+FF5E 対策）。
+        let town_area = normalize_tilde(
+            &raw_town_area.replace('（', "").replace('）', "")
+        ).into_owned();
 
         grouped.entry(prefecture.clone()).or_default().push(Address {
             postcode: format!("{}-{}", &postcode[..3], &postcode[3..]),
@@ -369,6 +372,207 @@ fn to_fullwidth(n: u8) -> String {
         .collect()
 }
 
+/// 全角数字を半角数字に変換する（数値パース用）。
+fn from_fullwidth_digits(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if ('０'..='９').contains(&c) {
+                (b'0' + (c as u32 - '０' as u32) as u8) as char
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// 波線の正規化: U+FF5E（～ 全角チルダ）を U+301C（〜 波ダッシュ）に統一する。
+/// 郵便番号 CSV は Shift_JIS 由来のため ～(U+FF5E) が混在することがある。
+fn normalize_tilde(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('\u{FF5E}') {
+        std::borrow::Cow::Owned(s.replace('\u{FF5E}', "\u{301C}"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// 全角・半角数字からなる文字列が「番」または「番地」で終わるか判定する。
+/// 中黒「・」前後の分割が番号表現かどうかの判定に使用。
+fn is_ban_token(s: &str) -> bool {
+    let s = s.trim();
+    // 末尾が「番地」または「番」で、その前が数字（全角・半角）のみ
+    let suffix = if s.ends_with("番地") {
+        &s[..s.len() - "番地".len()]
+    } else if s.ends_with('番') {
+        &s[..s.len() - '番'.len_utf8()]
+    } else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || ('０'..='９').contains(&c))
+}
+
+/// 波線「〜」を挟む左辺・右辺から数値範囲を抽出して、
+/// [lo, hi] のランダムな値を全角数字で返す。
+/// 失敗した場合は None。
+fn pick_tilde_range(s: &str, rng: &mut impl Rng) -> Option<String> {
+    let tilde_pos = s.find('〜')?;
+    let left  = &s[..tilde_pos];
+    let right = &s[tilde_pos + '〜'.len_utf8()..];
+
+    let left_ascii  = from_fullwidth_digits(left);
+    let right_ascii = from_fullwidth_digits(right);
+
+    let left_num_str: String = left_ascii.chars().rev()
+        .take_while(|c| c.is_ascii_digit()).collect::<String>()
+        .chars().rev().collect();
+    let right_num_str: String = right_ascii.chars()
+        .take_while(|c| c.is_ascii_digit()).collect();
+
+    let lo = left_num_str.parse::<u32>().ok()?;
+    let hi = right_num_str.parse::<u32>().ok()?;
+    if lo > hi { return None; }
+
+    // prefix（left の末尾数字を除いた部分）
+    let num_chars_left = left.chars().rev()
+        .take_while(|c| ('０'..='９').contains(c) || c.is_ascii_digit())
+        .count();
+    let prefix_end = left.char_indices()
+        .nth(left.chars().count() - num_chars_left)
+        .map(|(i, _)| i)
+        .unwrap_or(left.len());
+    let prefix = &left[..prefix_end];
+
+    // suffix（right の先頭数字を除いた部分）
+    let num_chars_right = right.chars()
+        .take_while(|c| ('０'..='９').contains(c) || c.is_ascii_digit())
+        .count();
+    let suffix_start = right.char_indices()
+        .nth(num_chars_right)
+        .map(|(i, _)| i)
+        .unwrap_or(right.len());
+    let suffix = &right[suffix_start..];
+
+    let chosen = rng.gen_range(lo..=hi);
+    let chosen_fw: String = chosen.to_string().chars()
+        .map(|c| char::from_u32('０' as u32 + (c as u32 - '0' as u32)).unwrap_or(c))
+        .collect();
+    Some(format!("{}{}{}", prefix, chosen_fw, suffix))
+}
+
+/// town_area 文字列を解釈してランダムに 1 つの値を返す。
+///
+/// 処理の優先順位:
+///   0. 除去キーワード:
+///      - 「地割」が含まれる → 「地割」の直前の文字（「第ｎ」等）ごと、
+///        「地割」以降の文字列（「第ｎ地割…」全体）を除去
+///      - 「地階」が含まれる → 「地階」以降を除去
+///   1. 読点「、」が含まれる → 候補に分割してランダムに 1 つ選択（再帰）
+///   2. 中黒「・」が含まれ、前後が「数字+番(地)」トークンの場合 →
+///        各トークンに再帰適用した結果からランダムに 1 つ選択
+///   3. 波線「〜」が含まれる → 数値範囲からランダムに選択。
+///        失敗した場合は左辺を採用して再帰。
+///   4. どれも該当しない → そのまま返す
+fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
+    // ── 0a. 「地割」除去 ─────────────────────────────────────
+    // 「第ｎ地割」または「地割」が含まれる場合、その手前の住所部分のみ残す。
+    // 「第」＋全角数字＋「地割」or「地割」単体を検索して、
+    // そのキーワード開始位置以降を切り捨てる。
+    let s = if let Some(pos) = find_chiwari_pos(s) {
+        &s[..pos]
+    } else {
+        s
+    };
+
+    // ── 0b. 「地階」除去 ─────────────────────────────────────
+    let s = if let Some(pos) = s.find("地階") {
+        &s[..pos]
+    } else {
+        s
+    };
+
+    let s = s.trim();
+    if s.is_empty() {
+        return s.to_string();
+    }
+
+    // ── 1. 読点分割（再帰） ──────────────────────────────────
+    if s.contains('、') {
+        let parts: Vec<&str> = s.split('、').collect();
+        let chosen = parts[rng.gen_range(0..parts.len())];
+        return resolve_town_area(chosen, rng);
+    }
+
+    // ── 2. 中黒「・」の前後が「数字+番(地)」の場合のみ分割 ──
+    // 例）「１番・１０〜２７番」→ ["１番", "１０〜２７番"] として再帰
+    if s.contains('・') {
+        let parts: Vec<&str> = s.split('・').collect();
+        // 全パートが ban_token（数字+番/番地）または波線を含む番号表現かチェック
+        let all_ban = parts.iter().all(|p| {
+            is_ban_token(p) || (p.contains('〜') && {
+                // 波線前後も番号表現かざっくり確認
+                let ti = p.find('〜').unwrap();
+                let l = &p[..ti];
+                let r = &p[ti + '〜'.len_utf8()..];
+                from_fullwidth_digits(l).chars().rev().next()
+                    .map(|c| c.is_ascii_digit()).unwrap_or(false)
+                    && from_fullwidth_digits(r).chars().next()
+                    .map(|c| c.is_ascii_digit()).unwrap_or(false)
+            })
+        });
+        if all_ban {
+            let chosen = parts[rng.gen_range(0..parts.len())];
+            return resolve_town_area(chosen, rng);
+        }
+    }
+
+    // ── 3. 波線範囲選択 ──────────────────────────────────────
+    if s.contains('〜') {
+        if let Some(result) = pick_tilde_range(s, rng) {
+            // 結果にまだ波線が残っている場合（例: 西４〜８線４９〜７８番地 の
+            // 最初の波線処理後に ４９〜７８番地 が suffix として残る）は再帰する
+            return if result.contains('〜') {
+                resolve_town_area(&result, rng)
+            } else {
+                result
+            };
+        }
+        // 数値が抽出できない場合は波線より左を採用して再帰
+        let left = &s[..s.find('〜').unwrap()];
+        return resolve_town_area(left, rng);
+    }
+
+    // ── 4. そのまま返す ─────────────────────────────────────
+    s.to_string()
+}
+
+/// 「第ｎ地割」または「地割」の開始バイト位置を返す。
+/// 「第」＋全角数字列＋「地割」の形、または単独の「地割」を検索する。
+fn find_chiwari_pos(s: &str) -> Option<usize> {
+    // 「地割」単体の位置を探し、その前に「第」+数字が続くなら
+    // 「第」の位置を、そうでなければ「地割」の位置を返す
+    if let Some(pos) = s.find("地割") {
+        // 「地割」の直前が全角数字で、さらにその前に「第」があるか確認
+        let before = &s[..pos];
+        let mut chars_rev = before.chars().rev();
+        // 直前の全角数字をスキップ
+        let num_count = chars_rev
+            .by_ref()
+            .take_while(|c| ('０'..='９').contains(c) || c.is_ascii_digit())
+            .count();
+        let dai_present = chars_rev.next() == Some('第');
+        let start = if num_count > 0 && dai_present {
+            // 「第」のバイト位置を計算
+            before.char_indices().rev()
+                .nth(num_count) // 数字 num_count 文字 + 「第」の次
+                .map(|(i, _)| i)
+                .unwrap_or(pos)
+        } else {
+            pos // 「地割」単体
+        };
+        return Some(start);
+    }
+    None
+}
+
 /// 丁目・番地・号をランダム生成する（数字・ハイフンはすべて全角）。
 /// - depth 0: 丁目のみ          例）「３」
 /// - depth 1: 丁目－番地        例）「３－７」
@@ -437,16 +641,17 @@ fn generate_user(
         prefecture_name: addr.prefecture.clone(),
         municipality_name: addr.municipality.clone(),
         phone_number,
-        // 丁目・番地・号の付与判定:
-        // town_area に全角数字（丁目相当）または半角数字が含まれる場合はそのまま使用し、
-        // それ以外はランダムな番地を末尾に付与する。
+        // town_area の解釈:
+        //   1. 読点「、」→ 候補からランダムに 1 つ選択（再帰）
+        //   2. 波線「〜」→ 数値範囲からランダムに 1 つ選択
+        //   3. 番地情報なし → 全角で丁目・番地・号をランダム付与
         town_area_name: {
-            let ta = &addr.town_area;
+            let ta = resolve_town_area(&addr.town_area, rng);
             let has_number = ta.chars().any(|c| c.is_ascii_digit())
                 || ta.chars().any(|c| ('０'..='９').contains(&c))
                 || ta.contains('丁');
             if has_number {
-                ta.clone()
+                ta
             } else {
                 format!("{}{}", ta, random_street_number(rng))
             }
