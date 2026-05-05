@@ -134,6 +134,7 @@ struct User {
     prefecture_name: String,
     municipality_name: String,
     town_area_name: String,
+    phone_number: String,
 }
 
 // ============================================================
@@ -317,6 +318,34 @@ fn random_birth_date(rng: &mut impl Rng, today: NaiveDate) -> String {
         .unwrap_or_else(|| "1990-01-01".to_string())
 }
 
+/// 電話番号インデックス（0..PHONE_SPACE）を文字列に変換する。
+/// 番号空間: {050|070|080|090} × 0{000..999} × {0000..9999} = 4,000万通り
+///   index = prefix_idx * 10_000_000 + mid * 10_000 + tail
+///   フォーマット例） 090-0123-4567
+const PHONE_SPACE: u32 = 4 * 1_000 * 10_000; // 40_000_000
+const PHONE_PREFIXES: [&str; 4] = ["050", "070", "080", "090"];
+
+fn phone_index_to_string(idx: u32) -> String {
+    let tail       = idx % 10_000;
+    let mid        = (idx / 10_000) % 1_000;
+    let prefix_idx = (idx / 10_000_000) as usize;
+    format!("{}-0{:03}-{:04}", PHONE_PREFIXES[prefix_idx], mid, tail)
+}
+
+/// 必要件数分の非重複電話番号インデックスを Fisher-Yates partial shuffle で生成する。
+/// Vec<u32> として返し、チャンクはスライスで受け取るため Mutex 不要。
+fn generate_phone_indices(total: usize, rng: &mut impl Rng) -> Vec<u32> {
+    assert!(total <= PHONE_SPACE as usize, "生成件数が電話番号空間を超えています");
+    // 0..PHONE_SPACE の先頭 total 要素だけをシャッフルする部分的 Fisher-Yates
+    let mut pool: Vec<u32> = (0..PHONE_SPACE).collect();
+    for i in 0..total {
+        let j = rng.gen_range(i..PHONE_SPACE as usize);
+        pool.swap(i, j);
+    }
+    pool.truncate(total);
+    pool
+}
+
 /// username の重複カウンタ（スレッド間共有）
 type UsernameCounter = Arc<Mutex<HashMap<String, u32>>>;
 
@@ -365,6 +394,7 @@ fn generate_user(
     addresses: &WeightedTable<Vec<Address>>,
     today: NaiveDate,
     username_counter: &UsernameCounter,
+    phone_number_idx: u32,
 ) -> User {
     // 性別
     let gender: u8 = if rng.gen_bool(0.5) { 1 } else { 2 };
@@ -389,6 +419,9 @@ fn generate_user(
     // 生年月日
     let birth_date = random_birth_date(rng, today);
 
+    // 電話番号（事前生成済みインデックスから変換）
+    let phone_number = phone_index_to_string(phone_number_idx);
+
     User {
         username,
         email,
@@ -403,16 +436,12 @@ fn generate_user(
         postcode: addr.postcode.clone(),
         prefecture_name: addr.prefecture.clone(),
         municipality_name: addr.municipality.clone(),
+        phone_number,
         // 丁目・番地・号の付与判定:
         // town_area に全角数字（丁目相当）または半角数字が含まれる場合はそのまま使用し、
         // それ以外はランダムな番地を末尾に付与する。
         town_area_name: {
-            let ta: String = if addr.town_area.contains('、') {
-                let parts: Vec<&str> = addr.town_area.split('、').collect();
-                parts[rng.gen_range(0..parts.len())].to_string()  // ランダムに1つ選択
-            } else {
-                addr.town_area.clone()
-            };
+            let ta = &addr.town_area;
             let has_number = ta.chars().any(|c| c.is_ascii_digit())
                 || ta.chars().any(|c| ('０'..='９').contains(&c))
                 || ta.contains('丁');
@@ -440,6 +469,7 @@ const CSV_HEADERS: &[&str] = &[
     "givenNameRomaji",
     "gender",
     "birthDate",
+    "phoneNumber",
     "postcode",
     "prefectureName",
     "municipalityName",
@@ -466,6 +496,7 @@ fn write_chunk(users: &[User], path: &PathBuf) -> Result<()> {
             &u.given_name_romaji,
             &u.gender.to_string(),
             &u.birth_date,
+            &u.phone_number,
             &u.postcode,
             &u.prefecture_name,
             &u.municipality_name,
@@ -526,6 +557,13 @@ fn main() -> Result<()> {
     let total_usize = total as usize;
     let num_chunks = (total_usize + chunk_size - 1) / chunk_size;
 
+    // 電話番号インデックスを事前生成（全件・重複なし・Mutex 不要）
+    println!("電話番号インデックスを生成しています...");
+    let phone_indices: Arc<Vec<u32>> = {
+        let mut rng = SmallRng::from_entropy();
+        Arc::new(generate_phone_indices(total_usize, &mut rng))
+    };
+
     println!(
         "チャンク数: {} （1チャンク最大 {} 件）",
         num_chunks, chunk_size
@@ -540,6 +578,7 @@ fn main() -> Result<()> {
     let female_names = Arc::clone(&female_names);
     let addresses = Arc::clone(&addresses);
     let username_counter = Arc::clone(&username_counter);
+    let phone_indices = Arc::clone(&phone_indices);
     let output_dir = args.output_dir.clone();
 
     let results: Vec<Result<()>> = (0..num_chunks)
@@ -554,13 +593,14 @@ fn main() -> Result<()> {
             let female_names = Arc::clone(&female_names);
             let addresses = Arc::clone(&addresses);
             let username_counter = Arc::clone(&username_counter);
+            let phone_indices = Arc::clone(&phone_indices);
 
             // スレッドローカル乱数生成器（高速）
             let mut rng = SmallRng::from_entropy();
 
             // ユーザー生成
             let users: Vec<User> = (0..n)
-                .map(|_| {
+                .map(|i| {
                     generate_user(
                         &mut rng,
                         &family_names,
@@ -569,6 +609,7 @@ fn main() -> Result<()> {
                         &addresses,
                         today,
                         &username_counter,
+                        phone_indices[start + i],
                     )
                 })
                 .collect();

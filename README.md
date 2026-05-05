@@ -60,7 +60,7 @@ dummy-user-generator
 dummy-user-generator
 ================================================================================
 
-ランダムな日本人ユーザーリストを高速生成する CLI ツールです。  
+ランダムな日本人ユーザーリストを高速生成する CLI ツールです。
 Rayon による **マルチスレッド並列生成 & 並列 CSV 書き込み** に対応しています。
 
 
@@ -142,7 +142,7 @@ dummy-user-generator/
 
 ### `utf_ken_all.zip`
 
-日本郵便が配布している郵便番号データ（UTF-8 エンコード）を ZIP 圧縮したファイル。  
+日本郵便が配布している郵便番号データ（UTF-8 エンコード）を ZIP 圧縮したファイル。
 ダウンロード先: https://www.post.japanpost.jp/zipcode/dl/utf/zip/utf_ken_all.zip
 
 ZIP 内の CSV の各列：
@@ -191,17 +191,17 @@ cargo build --release
 
 ### オプション一覧
 
-| オプション                | 短縮   | デフォルト                        | 説明                   |
-|----------------------|------|------------------------------|----------------------|
-| `--count`            | `-c` | `1000`                       | 生成件数（最大 10,000,000）  |
-| `--family-name`      |      | `data/family_name.csv`       | 姓 CSV パス             |
-| `--given-name-male`  |      | `data/given_name_male.csv`   | 男性名 CSV パス           |
-| `--given-name-female` |     | `data/given_name_female.csv` | 女性名 CSV パス           |
-| `--ken-frequency`    |      | `data/ken_frequency.csv`     | 都道府県出現頻度 CSV パス      |
-| `--ken-all`          |      | `data/utf_ken_all.zip`       | 郵便番号 ZIP パス          |
-| `--output-dir`       | `-o` | `output`                     | 出力ディレクトリ             |
-| `--chunk-size`       |      | `1,000,000`                  | ファイル分割単位             |
-| `--threads`          |      | `0`（全コア）                     | 使用スレッド数              |
+| オプション                 | 短縮   | デフォルト                        | 説明                   |
+|-----------------------|------|------------------------------|----------------------|
+| `--count`             | `-c` | `1000`                       | 生成件数（最大 10,000,000）  |
+| `--family-name`       |      | `data/family_name.csv`       | 姓 CSV パス             |
+| `--given-name-male`   |      | `data/given_name_male.csv`   | 男性名 CSV パス           |
+| `--given-name-female` |      | `data/given_name_female.csv` | 女性名 CSV パス           |
+| `--ken-frequency`     |      | `data/ken_frequency.csv`     | 都道府県出現頻度 CSV パス      |
+| `--ken-all`           |      | `data/utf_ken_all.zip`       | 郵便番号 ZIP パス          |
+| `--output-dir`        | `-o` | `output`                     | 出力ディレクトリ             |
+| `--chunk-size`        |      | `1,000,000`                  | ファイル分割単位             |
+| `--threads`           |      | `0`（全コア）                     | 使用スレッド数              |
 
 
 出力ファイル
@@ -212,22 +212,23 @@ cargo build --release
 
 ### CSV 列定義
 
-| 列                    | 内容                                    |
-|----------------------|---------------------------------------|
-| `username`           | 姓ローマ字.名ローマ字（小文字）、重複時は連番付き            |
-| `email`              | `username@example.com`                |
-| `familyName`         | 姓（漢字）                                 |
-| `familyNameHiragana` | 姓（ひらがな）                               |
-| `familyNameRomaji`   | 姓（ローマ字）                               |
-| `givenName`          | 名（漢字）                                 |
-| `givenNameHiragana`  | 名（ひらがな）                               |
-| `givenNameRomaji`    | 名（ローマ字）                               |
-| `gender`             | 1=男性、2=女性                             |
-| `birthDate`          | 生年月日（YYYY-MM-DD）、12〜105歳              |
-| `postcode`           | 郵便番号（例: 100-0001）                     |
-| `prefectureName`     | 都道府県名                                 |
-| `municipalityName`   | 市区町村名                                 |
-| `townAreaName`       | 町域名（番地なしの場合は全角で丁目・番地・号をランダム付与）        |
+| 列                    | 内容                                         |
+|----------------------|--------------------------------------------|
+| `username`           | 姓ローマ字.名ローマ字（小文字）、重複時は連番付き                 |
+| `email`              | `username@example.com`                     |
+| `familyName`         | 姓（漢字）                                      |
+| `familyNameHiragana` | 姓（ひらがな）                                    |
+| `familyNameRomaji`   | 姓（ローマ字）                                    |
+| `givenName`          | 名（漢字）                                      |
+| `givenNameHiragana`  | 名（ひらがな）                                    |
+| `givenNameRomaji`    | 名（ローマ字）                                    |
+| `gender`             | 1=男性、2=女性                                  |
+| `birthDate`          | 生年月日（YYYY-MM-DD）、12〜105歳                   |
+| `phoneNumber`        | 電話番号（例: 090-0123-4567）、重複なし                |
+| `postcode`           | 郵便番号（例: 100-0001）                          |
+| `prefectureName`     | 都道府県名                                      |
+| `municipalityName`   | 市区町村名                                      |
+| `townAreaName`       | 町域名（番地なしの場合は全角で丁目・番地・号をランダム付与）             |
 
 
 アーキテクチャ
@@ -244,38 +245,44 @@ main()
   │                                  ├─ 第1段階: 都道府県を重み付き選択
   │                                  └─ 第2段階: 都道府県内の住所を均等選択
   │
+  ├─ 電話番号インデックス事前生成（シングルスレッド）
+  │    └─ Fisher-Yates partial shuffle → Arc<Vec<u32>>（全件・重複なし）
+  │
   └─ rayon::par_iter（チャンク単位で並列）
        ├─ Thread 0: generate N users → write users_0001.csv
        ├─ Thread 1: generate N users → write users_0002.csv
        └─ Thread N: ...
             │
             ├─ SmallRng::from_entropy()（スレッドローカル乱数器）
-            └─ username 重複解決のみ Mutex<HashMap> で直列化
+            ├─ username 重複解決のみ Mutex<HashMap> で直列化
+            └─ 電話番号は Arc<Vec<u32>> のスライスを参照（Mutex 不要）
 ```
 
 ### 設計のポイント
 
-| 項目            | 採用技術                          | 理由                          |
-|---------------|-----------------------------------|-----------------------------|
-| 並列生成          | `rayon`                           | ゼロコスト並列イテレーター               |
-| 乱数            | `SmallRng`（スレッドローカル）             | Mutex 不要で高速                 |
-| username 重複管理 | `Mutex<HashMap<String, u32>>`     | 全体で一意性保証                    |
-| 重み付き選択        | `WeightedTable<T>`（累積和 + 二分探索）   | ロード時 O(n)・選択時 O(log n) で高速  |
-| CSV           | `csv` クレート                       | 高速・RFC 4180 準拠              |
-| 郵便番号          | `zip` クレート                       | ZIP 直接展開・UTF-8 として読み込み      |
-| 日付            | `chrono`                          | 閏年・年齢計算が正確                  |
+| 項目              | 採用技術                                        | 理由                          |
+|-----------------|---------------------------------------------|-----------------------------|
+| 並列生成            | `rayon`                                     | ゼロコスト並列イテレーター               |
+| 乱数              | `SmallRng`（スレッドローカル）                        | Mutex 不要で高速                 |
+| username 重複管理   | `Mutex<HashMap<String, u32>>`               | 全体で一意性保証                    |
+| 重み付き選択          | `WeightedTable<T>`（累積和 + 二分探索）              | ロード時 O(n)・選択時 O(log n) で高速  |
+| 電話番号の一意性保証      | Fisher-Yates partial shuffle → `Arc<Vec<u32>>` | Mutex・再試行ゼロ、O(1) アクセス        |
+| CSV             | `csv` クレート                                  | 高速・RFC 4180 準拠              |
+| 郵便番号            | `zip` クレート                                  | ZIP 直接展開・UTF-8 として読み込み      |
+| 日付              | `chrono`                                    | 閏年・年齢計算が正確                  |
 
 
 パフォーマンス目安
 --------------------------------------------------------------------------------
 
-| 件数    | コア数 | 目安時間 |
-|-------|-----|------|
-| 100万  | 4   | ~3秒  |
-| 500万  | 8   | ~8秒  |
-| 1000万 | 16  | ~12秒 |
+| 件数    | コア数 | 目安時間  |
+|-------|-----|-------|
+| 100万  | 4   | ~3秒   |
+| 500万  | 8   | ~8秒   |
+| 1000万 | 16  | ~15秒  |
 
-※ SSD 環境・郵便番号 CSV が 12 万件の場合の目安値
+※ SSD 環境・郵便番号 CSV が 12 万件の場合の目安値  
+※ 起動時の電話番号インデックス生成（~1秒・メモリ使用量 ~40MB）を含む
 
 
 注意事項
@@ -283,6 +290,8 @@ main()
 
 - username の重複カウンタは `Mutex` で保護しているため、超大量生成（1000万件）でも正確な連番が付与されます。
 - 生年月日の範囲：実行日から 12 歳以上 105 歳以下（誕生日当日を含む）。
+- 電話番号は `050` / `070` / `080` / `090` で始まり、4桁目が `0` 固定の 11 桁形式です。生成可能な総パターン数は 4,000 万通りで、最大生成件数（1,000 万件）に対して十分な空間を確保しています。
 - `townAreaName` が「以下に掲載がない場合」の行は読み込み時に除外されます。
 - `townAreaName` の全角括弧 `（）` は除去されますが、括弧内の文字列は保持されます。
+- `townAreaName` に読点 `、` が含まれる場合、読点で区切られた候補の中からランダムに 1 つ選択します。
 - `townAreaName` に番地情報がない場合、全角数字・全角ハイフンで丁目・番地・号（各 1〜20）をランダムに付与します。
