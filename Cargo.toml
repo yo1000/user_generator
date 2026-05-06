@@ -11,9 +11,9 @@ path = "src/main.rs"
 # CSV読み書き
 csv = "1.3"
 # 乱数生成
-rand = { version = "0.8", features = ["small_rng"] }
+rand = { version = "0.10" }
 # ZIPファイル展開
-zip = "0.6"
+zip = "8.6"
 # 日付処理
 chrono = { version = "0.4", features = ["serde"] }
 # 並列処理

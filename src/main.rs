@@ -5,7 +5,7 @@ mod writer;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, SysRng};
 use rand::SeedableRng;
 use rayon::prelude::*;
 use std::{
@@ -118,7 +118,7 @@ fn main() -> Result<()> {
     // 電話番号インデックスを事前生成（全件・重複なし・Mutex 不要）
     println!("電話番号インデックスを生成しています...");
     let phone_indices: Arc<Vec<u32>> = {
-        let mut rng = SmallRng::from_entropy();
+        let mut rng = SmallRng::try_from_rng(&mut SysRng).unwrap();
         Arc::new(generate_phone_indices(total_usize, &mut rng))
     };
 
@@ -147,7 +147,7 @@ fn main() -> Result<()> {
             let username_counter = Arc::clone(&username_counter);
             let phone_indices    = Arc::clone(&phone_indices);
 
-            let mut rng = SmallRng::from_entropy();
+            let mut rng = SmallRng::try_from_rng(&mut SysRng).unwrap();
 
             let users = (0..n)
                 .map(|i| generate_user(

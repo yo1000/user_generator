@@ -222,11 +222,11 @@ mod tests {
     /// インメモリの郵便番号 CSV から ZIP バイト列を生成する。
     fn make_ken_zip(csv_content: &str) -> Vec<u8> {
         use std::io::Cursor;
-        use zip::{write::FileOptions, ZipWriter};
+        use zip::ZipWriter;
 
         let buf = Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(buf);
-        zip.start_file("ken_all.csv", FileOptions::default()).unwrap();
+        zip.start_file("ken_all.csv", zip::write::FileOptions::<()>::default()).unwrap();
         zip.write_all(csv_content.as_bytes()).unwrap();
         zip.finish().unwrap().into_inner()
     }

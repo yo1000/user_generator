@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{Datelike, Duration, NaiveDate};
-use rand::Rng;
+use rand::RngExt;
 
 use crate::models::{Address, FamilyName, GivenName, User, WeightedTable};
 
@@ -47,12 +47,12 @@ pub fn phone_index_to_string(idx: u32) -> String {
 
 /// 必要件数分の非重複電話番号インデックスを Fisher-Yates partial shuffle で生成する。
 /// Vec<u32> として返し、チャンクはスライスで受け取るため Mutex 不要。
-pub fn generate_phone_indices(total: usize, rng: &mut impl Rng) -> Vec<u32> {
+pub fn generate_phone_indices(total: usize, rng: &mut impl RngExt) -> Vec<u32> {
     assert!(total <= PHONE_SPACE as usize, "生成件数が電話番号空間を超えています");
     // 0..PHONE_SPACE の先頭 total 要素だけをシャッフルする部分的 Fisher-Yates
     let mut pool: Vec<u32> = (0..PHONE_SPACE).collect();
     for i in 0..total {
-        let j = rng.gen_range(i..PHONE_SPACE as usize);
+        let j = rng.random_range(i..PHONE_SPACE as usize);
         pool.swap(i, j);
     }
     pool.truncate(total);
@@ -101,7 +101,7 @@ fn is_ban_token(s: &str) -> bool {
 /// 波線「〜」を挟む左辺・右辺から数値範囲を抽出して、
 /// [lo, hi] のランダムな値を全角数字で返す。
 /// 失敗した場合は None。
-fn pick_tilde_range(s: &str, rng: &mut impl Rng) -> Option<String> {
+fn pick_tilde_range(s: &str, rng: &mut impl RngExt) -> Option<String> {
     let tilde_pos = s.find('〜')?;
     let left  = &s[..tilde_pos];
     let right = &s[tilde_pos + '〜'.len_utf8()..];
@@ -139,7 +139,7 @@ fn pick_tilde_range(s: &str, rng: &mut impl Rng) -> Option<String> {
         .unwrap_or(right.len());
     let suffix = &right[suffix_start..];
 
-    let chosen = rng.gen_range(lo..=hi);
+    let chosen = rng.random_range(lo..=hi);
     let chosen_fw: String = chosen.to_string().chars()
         .map(|c| char::from_u32('０' as u32 + (c as u32 - '0' as u32)).unwrap_or(c))
         .collect();
@@ -190,7 +190,7 @@ fn find_chiwari_pos(s: &str) -> Option<usize> {
 ///   3. 波線「〜」が含まれる → 数値範囲からランダムに選択。
 ///        結果に波線が残る場合は再帰。失敗した場合は左辺を採用して再帰。
 ///   4. どれも該当しない → そのまま返す
-pub fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
+pub fn resolve_town_area(s: &str, rng: &mut impl RngExt) -> String {
     // ── 0a. 「地割」除去 ─────────────────────────────────────
     let s = if let Some(pos) = find_chiwari_pos(s) { &s[..pos] } else { s };
 
@@ -205,7 +205,7 @@ pub fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
     // ── 1. 読点分割（再帰） ──────────────────────────────────
     if s.contains('、') {
         let parts: Vec<&str> = s.split('、').collect();
-        let chosen = parts[rng.gen_range(0..parts.len())];
+        let chosen = parts[rng.random_range(0..parts.len())];
         return resolve_town_area(chosen, rng);
     }
 
@@ -224,7 +224,7 @@ pub fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
             })
         });
         if all_ban {
-            let chosen = parts[rng.gen_range(0..parts.len())];
+            let chosen = parts[rng.random_range(0..parts.len())];
             return resolve_town_area(chosen, rng);
         }
     }
@@ -254,11 +254,11 @@ pub fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
 /// - depth 0: 丁目のみ          例）「３」
 /// - depth 1: 丁目－番地        例）「３－７」
 /// - depth 2: 丁目－番地－号    例）「３－７－１２」
-pub fn random_street_number(rng: &mut impl Rng) -> String {
-    let depth  = rng.gen_range(0..=2usize);
-    let chome  = to_fullwidth(rng.gen_range(1u8..=20));
-    let banchi = to_fullwidth(rng.gen_range(1u8..=20));
-    let go     = to_fullwidth(rng.gen_range(1u8..=20));
+pub fn random_street_number(rng: &mut impl RngExt) -> String {
+    let depth  = rng.random_range(0..=2usize);
+    let chome  = to_fullwidth(rng.random_range(1u8..=20));
+    let banchi = to_fullwidth(rng.random_range(1u8..=20));
+    let go     = to_fullwidth(rng.random_range(1u8..=20));
     match depth {
         0 => chome,
         1 => format!("{}－{}", chome, banchi),
@@ -271,13 +271,13 @@ pub fn random_street_number(rng: &mut impl Rng) -> String {
 // ============================================================
 
 /// 生年月日をランダム生成（12歳以上 105歳以下）
-fn random_birth_date(rng: &mut impl Rng, today: NaiveDate) -> String {
+fn random_birth_date(rng: &mut impl RngExt, today: NaiveDate) -> String {
     let min_date = today - Duration::days(105 * 365 + 26); // 最年長
     let max_date = today - Duration::days(12 * 365 + 3);   // 最年少
 
     let min_ord = min_date.num_days_from_ce();
     let max_ord = max_date.num_days_from_ce();
-    let rand_ord = rng.gen_range(min_ord..=max_ord);
+    let rand_ord = rng.random_range(min_ord..=max_ord);
     NaiveDate::from_num_days_from_ce_opt(rand_ord)
         .map(|d| format!("{}-{:02}-{:02}", d.year(), d.month(), d.day()))
         .unwrap_or_else(|| "1990-01-01".to_string())
@@ -289,7 +289,7 @@ fn random_birth_date(rng: &mut impl Rng, today: NaiveDate) -> String {
 
 /// ユーザー 1 件を生成する
 pub fn generate_user(
-    rng: &mut impl Rng,
+    rng: &mut impl RngExt,
     family_names: &WeightedTable<FamilyName>,
     male_names: &WeightedTable<GivenName>,
     female_names: &WeightedTable<GivenName>,
@@ -299,7 +299,7 @@ pub fn generate_user(
     phone_number_idx: u32,
 ) -> User {
     // 性別
-    let gender: u8 = if rng.gen_bool(0.5) { 1 } else { 2 };
+    let gender: u8 = if rng.random_bool(0.5) { 1 } else { 2 };
 
     // 重み付きランダム選択
     let fam = family_names.sample(rng);
@@ -316,7 +316,7 @@ pub fn generate_user(
 
     // 住所: 第1段階=都道府県を重み付き選択、第2段階=その都道府県内を均等選択
     let pref_addrs = addresses.sample(rng);
-    let addr = &pref_addrs[rng.gen_range(0..pref_addrs.len())];
+    let addr = &pref_addrs[rng.random_range(0..pref_addrs.len())];
 
     // 生年月日
     let birth_date = random_birth_date(rng, today);
@@ -359,8 +359,8 @@ pub fn generate_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use rand::SeedableRng;
 
     /// 固定シードの RNG を返す（テストの再現性を保証）
     fn rng() -> SmallRng { SmallRng::seed_from_u64(42) }

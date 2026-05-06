@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 // ============================================================
 //  名前レコード
@@ -82,8 +82,8 @@ impl<T> WeightedTable<T> {
     }
 
     /// 重みに比例した確率で 1 件をランダムに返す。
-    pub fn sample<'a>(&'a self, rng: &mut impl Rng) -> &'a T {
-        let r = rng.gen_range(0.0..self.total);
+    pub fn sample<'a>(&'a self, rng: &mut impl RngExt) -> &'a T {
+        let r = rng.random_range(0.0..self.total);
         // 二分探索で r を超える最初のインデックスを求める
         let idx = self.cumulative.partition_point(|&c| c <= r);
         &self.items[idx.min(self.items.len() - 1)]
