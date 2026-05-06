@@ -9,7 +9,7 @@ on:
       - '*'
 
 jobs:
-  build-test:
+  build:
     strategy:
       matrix:
         os: [ ubuntu-latest ]
@@ -30,10 +30,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - uses: actions/checkout@v6
-      - name: Build binaries in "${{ matrix.build_target }}" mode
-        run: cargo build --profile ${{ matrix.build_target }}
       - name: Run tests in "${{ matrix.build_target }}" mode
         run: cargo test --profile ${{ matrix.build_target }}
+      - name: Build binaries in "${{ matrix.build_target }}" mode
+        run: cargo build --profile ${{ matrix.build_target }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
@@ -43,7 +43,7 @@ jobs:
 
   container:
     if: contains(github.ref, 'refs/tags/')
-    needs: [build-test]
+    needs: [ build ]
     strategy:
       matrix:
         os: [ ubuntu-latest ]

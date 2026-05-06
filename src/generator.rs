@@ -148,25 +148,33 @@ fn pick_tilde_range(s: &str, rng: &mut impl Rng) -> Option<String> {
 
 /// 「第ｎ地割」または「地割」の開始バイト位置を返す。
 fn find_chiwari_pos(s: &str) -> Option<usize> {
-    if let Some(pos) = s.find("地割") {
-        let before = &s[..pos];
-        let mut chars_rev = before.chars().rev();
-        let num_count = chars_rev
-            .by_ref()
-            .take_while(|c| ('０'..='９').contains(c) || c.is_ascii_digit())
-            .count();
-        let dai_present = chars_rev.next() == Some('第');
-        let start = if num_count > 0 && dai_present {
-            before.char_indices().rev()
-                .nth(num_count)
-                .map(|(i, _)| i)
-                .unwrap_or(pos)
-        } else {
-            pos
-        };
-        return Some(start);
+    let pos = s.find("地割")?;
+    let before = &s[..pos];
+
+    // before を文字のリストとして収集し、末尾から検索する
+    let chars: Vec<char> = before.chars().collect();
+    let total = chars.len();
+
+    // 末尾から連続する全角・半角数字を数える
+    let num_count = chars.iter().rev()
+        .take_while(|&&c| ('０'..='９').contains(&c) || c.is_ascii_digit())
+        .count();
+
+    // 数字の直前が「第」かどうか確認
+    let dai_idx = total.checked_sub(num_count + 1);
+    let dai_present = dai_idx.map(|i| chars[i] == '第').unwrap_or(false);
+
+    if num_count > 0 && dai_present {
+        // 「第」のバイト位置を char_indices で取得
+        let dai_char_idx = total - num_count - 1;
+        let start = before.char_indices()
+            .nth(dai_char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(pos);
+        Some(start)
+    } else {
+        Some(pos)
     }
-    None
 }
 
 /// town_area 文字列を解釈してランダムに 1 つの値を返す。
@@ -211,7 +219,7 @@ pub fn resolve_town_area(s: &str, rng: &mut impl Rng) -> String {
                 let r = &p[ti + '〜'.len_utf8()..];
                 from_fullwidth_digits(l).chars().rev().next()
                     .map(|c| c.is_ascii_digit()).unwrap_or(false)
-                && from_fullwidth_digits(r).chars().next()
+                    && from_fullwidth_digits(r).chars().next()
                     .map(|c| c.is_ascii_digit()).unwrap_or(false)
             })
         });
@@ -341,5 +349,288 @@ pub fn generate_user(
         prefecture_name: addr.prefecture.clone(),
         municipality_name: addr.municipality.clone(),
         town_area_name,
+    }
+}
+
+// ============================================================
+//  テスト
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    /// 固定シードの RNG を返す（テストの再現性を保証）
+    fn rng() -> SmallRng { SmallRng::seed_from_u64(42) }
+
+    // ----------------------------------------------------------
+    //  from_fullwidth_digits
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_from_fullwidth_digits_all_fullwidth() {
+        assert_eq!(from_fullwidth_digits("１２３"), "123");
+    }
+
+    #[test]
+    fn test_from_fullwidth_digits_mixed() {
+        // 全角・半角・非数字が混在しても非数字はそのまま
+        assert_eq!(from_fullwidth_digits("西４線49"), "西4線49");
+    }
+
+    #[test]
+    fn test_from_fullwidth_digits_no_digits() {
+        assert_eq!(from_fullwidth_digits("番地"), "番地");
+    }
+
+    // ----------------------------------------------------------
+    //  is_ban_token
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_is_ban_token_fullwidth_ban() {
+        assert!(is_ban_token("１番"));
+        assert!(is_ban_token("１０番"));
+        assert!(is_ban_token("２７番"));
+    }
+
+    #[test]
+    fn test_is_ban_token_banti() {
+        assert!(is_ban_token("４９番地"));
+        assert!(is_ban_token("７８番地"));
+    }
+
+    #[test]
+    fn test_is_ban_token_not_number() {
+        // 数字のない「番」は番号表現ではない
+        assert!(!is_ban_token("番"));
+        assert!(!is_ban_token("番地"));
+    }
+
+    #[test]
+    fn test_is_ban_token_building_name() {
+        // 建物名など数字なしは false
+        assert!(!is_ban_token("南館"));
+        assert!(!is_ban_token("花川町"));
+    }
+
+    // ----------------------------------------------------------
+    //  find_chiwari_pos
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_find_chiwari_pos_dai_n_with_prefix() {
+        // 「前住所＋第ｎ地割」→ 「第」より前の住所部分のバイト位置を返す
+        let s = "上野第２地割「９２」";
+        let pos = find_chiwari_pos(s).unwrap();
+        assert_eq!(&s[..pos], "上野");
+    }
+
+    #[test]
+    fn test_find_chiwari_pos_dai_n_only() {
+        // 「第ｎ地割」のみ（先頭から地割）→ 先頭バイト位置 0 を返す
+        let s = "第２地割「９２」";
+        let pos = find_chiwari_pos(s).unwrap();
+        assert_eq!(&s[..pos], "");
+    }
+
+    #[test]
+    fn test_find_chiwari_pos_standalone() {
+        // 単独「地割」
+        let s = "上野地割";
+        let pos = find_chiwari_pos(s).unwrap();
+        assert_eq!(&s[..pos], "上野");
+    }
+
+    #[test]
+    fn test_find_chiwari_pos_none() {
+        assert!(find_chiwari_pos("六本木６丁目").is_none());
+    }
+
+    // ----------------------------------------------------------
+    //  pick_tilde_range
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_pick_tilde_range_basic() {
+        let mut rng = rng();
+        for _ in 0..20 {
+            let result = pick_tilde_range("４９〜７８番地", &mut rng).unwrap();
+            // 結果は「XX番地」形式で波線を含まない
+            assert!(!result.contains('〜'), "波線が残っている: {result}");
+            assert!(result.ends_with("番地"), "suffix が欠落: {result}");
+        }
+    }
+
+    #[test]
+    fn test_pick_tilde_range_range_bounds() {
+        let mut rng = rng();
+        for _ in 0..50 {
+            let result = pick_tilde_range("４９〜７８番地", &mut rng).unwrap();
+            // 数値部分を抽出して範囲内か確認
+            let num: u32 = from_fullwidth_digits(result.trim_end_matches("番地"))
+                .parse()
+                .unwrap();
+            assert!((49..=78).contains(&num), "範囲外: {num}");
+        }
+    }
+
+    #[test]
+    fn test_pick_tilde_range_with_line_prefix() {
+        // 「西５線」のようなプレフィックスが残るケース
+        let mut rng = rng();
+        let result = pick_tilde_range("美栄町西５線７９〜１１０番地", &mut rng).unwrap();
+        assert!(result.starts_with("美栄町西５線"), "prefix が欠落: {result}");
+        assert!(result.ends_with("番地"), "suffix が欠落: {result}");
+    }
+
+    #[test]
+    fn test_pick_tilde_range_lo_greater_than_hi_returns_none() {
+        let mut rng = rng();
+        // lo > hi は None
+        assert!(pick_tilde_range("７８〜４９番地", &mut rng).is_none());
+    }
+
+    #[test]
+    fn test_pick_tilde_range_no_number_returns_none() {
+        let mut rng = rng();
+        // 数値が抽出できない場合は None
+        assert!(pick_tilde_range("花川町〜花川南", &mut rng).is_none());
+    }
+
+    // ----------------------------------------------------------
+    //  resolve_town_area — 基本
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_resolve_town_area_plain() {
+        let mut rng = rng();
+        let result = resolve_town_area("六本木６丁目", &mut rng);
+        assert_eq!(result, "六本木６丁目");
+    }
+
+    #[test]
+    fn test_resolve_town_area_no_tilde_remains() {
+        // どのケースも波線が結果に残ってはいけない
+        let cases = [
+            "美栄町西５線７９〜１１０番地",
+            "美栄町西６線７９〜１１０番地",
+            "富士町西４線４９〜７８番地",
+            "富士町西７線４９〜７８番地",
+            "富士町西８線４９〜７８番地",
+        ];
+        for s in cases {
+            let mut rng = rng();
+            let result = resolve_town_area(s, &mut rng);
+            assert!(!result.contains('〜'), "波線残存 [{s}] → [{result}]");
+        }
+    }
+
+    // ----------------------------------------------------------
+    //  resolve_town_area — 元データ由来の問題ケース
+    //  （以前バグを起こした実データを必ず含む）
+    // ----------------------------------------------------------
+
+    /// 括弧除去・normalize_tilde 後の実データ相当
+    /// 元データ: 富士町（西４～８線４９～７８番地）
+    /// 処理後  : 富士町西４〜８線４９〜７８番地
+    #[test]
+    fn test_resolve_town_area_double_tilde_recursive() {
+        let input = "富士町西４〜８線４９〜７８番地";
+        for seed in 0..30 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let result = resolve_town_area(input, &mut rng);
+            assert!(!result.contains('〜'),
+                    "波線残存 seed={seed} [{input}] → [{result}]");
+            assert!(result.starts_with("富士町西"),
+                    "prefix 欠落 seed={seed} [{result}]");
+            assert!(result.ends_with("番地"),
+                    "suffix 欠落 seed={seed} [{result}]");
+        }
+    }
+
+    /// U+FF5E（全角チルダ）が normalize_tilde を経由せず残った場合の保険
+    /// load_addresses で正規化済みのはずだが、回帰テストとして保持
+    #[test]
+    fn test_resolve_town_area_ff5e_tilde_via_loader_normalization() {
+        // loader::normalize_tilde で U+301C に変換されていることを前提とする
+        // ここでは変換済み文字列で resolve が正しく動くことを確認
+        let normalized = "富士町西４\u{301C}８線４９\u{301C}７８番地";
+        let mut rng = rng();
+        let result = resolve_town_area(normalized, &mut rng);
+        assert!(!result.contains('\u{301C}'), "波線残存: {result}");
+        assert!(!result.contains('\u{FF5E}'), "FF5E 残存: {result}");
+    }
+
+    // ----------------------------------------------------------
+    //  resolve_town_area — 読点
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_resolve_town_area_ten_ten() {
+        // 読点分割後の候補のいずれかが返る
+        let candidates = ["泉が丘", "泉北高速鉄道以東"];
+        let input = "泉が丘、泉北高速鉄道以東";
+        for _ in 0..30 {
+            let mut rng = rng();
+            let result = resolve_town_area(input, &mut rng);
+            assert!(candidates.contains(&result.as_str()),
+                    "候補外の値: {result}");
+        }
+    }
+
+    // ----------------------------------------------------------
+    //  resolve_town_area — 中黒
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_resolve_town_area_nakaguro_ban() {
+        // 「数字+番」形式のみ中黒で分割される
+        let input = "１番・１０〜２７番";
+        for _ in 0..30 {
+            let mut rng = rng();
+            let result = resolve_town_area(input, &mut rng);
+            assert!(!result.contains('〜'), "波線残存: {result}");
+            assert!(!result.contains('・'), "中黒残存: {result}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_town_area_nakaguro_building_name_kept() {
+        // 建物名の中黒は分割されない
+        let input = "東京ミッドタウン・タワー";
+        let mut rng = rng();
+        let result = resolve_town_area(input, &mut rng);
+        assert_eq!(result, "東京ミッドタウン・タワー");
+    }
+
+    // ----------------------------------------------------------
+    //  resolve_town_area — 地割・地階の除去
+    // ----------------------------------------------------------
+
+    #[test]
+    fn test_resolve_town_area_chiwari_removed() {
+        let cases = [
+            "第２地割「９２」〜第４地割「３〜１１」",
+            "第２地割「９６」〜第４地割「３〜１１」",
+            "第２地割「９８」〜第４地割「３〜１１」",
+            "第２地割「１０４」〜第４地割「３〜１１」",
+        ];
+        for s in cases {
+            let mut rng = rng();
+            let result = resolve_town_area(s, &mut rng);
+            assert!(!result.contains("地割"), "地割残存 [{s}] → [{result}]");
+            assert!(!result.contains('〜'), "波線残存 [{s}] → [{result}]");
+        }
+    }
+
+    #[test]
+    fn test_resolve_town_area_chikai_removed() {
+        let input = "地階・階層不明";
+        let mut rng = rng();
+        let result = resolve_town_area(input, &mut rng);
+        assert!(!result.contains("地階"), "地階残存: {result}");
     }
 }
